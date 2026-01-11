@@ -249,6 +249,18 @@
             const storedLeads = localStorage.getItem('leads');
             if (storedLeads) {
                 leads = JSON.parse(storedLeads);
+                // Migration: Ensure all leads have createdAt timestamp
+                let needsSave = false;
+                leads.forEach(lead => {
+                    if (!lead.createdAt) {
+                        // If no createdAt, use a default date (7 days ago to avoid false "Today" badges)
+                        lead.createdAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+                        needsSave = true;
+                    }
+                });
+                if (needsSave) {
+                    saveLeads();
+                }
             }
             renderBoard();
             updatePipelineValue();
@@ -307,6 +319,10 @@
                 lead.leadStatus = leadStatus;
                 lead.estimatedValue = parseFloat(estimatedValue);
                 lead.notes = notes.trim();
+                // Preserve createdAt timestamp - don't update it
+                if (!lead.createdAt) {
+                    lead.createdAt = new Date().toISOString();
+                }
                 saveLeads();
                 renderBoard();
                 updatePipelineValue();
@@ -339,6 +355,45 @@
         function filterLeads(searchTerm) {
             currentSearchTerm = searchTerm.toLowerCase();
             renderBoard();
+        }
+
+        // ============================================
+        // DATE COMPARISON FUNCTIONS
+        // ============================================
+
+        function getDaysInPipeline(createdAt) {
+            if (!createdAt) return 0;
+            
+            const createdDate = new Date(createdAt);
+            const today = new Date();
+            
+            // Reset time to midnight for accurate day comparison
+            today.setHours(0, 0, 0, 0);
+            createdDate.setHours(0, 0, 0, 0);
+            
+            // Calculate difference in milliseconds and convert to days
+            const diffTime = today - createdDate;
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            
+            return diffDays;
+        }
+
+        function isToday(createdAt) {
+            if (!createdAt) return false;
+            
+            const createdDate = new Date(createdAt);
+            const today = new Date();
+            
+            return createdDate.getDate() === today.getDate() &&
+                   createdDate.getMonth() === today.getMonth() &&
+                   createdDate.getFullYear() === today.getFullYear();
+        }
+
+        function isOverdue(lead) {
+            if (lead.leadStatus !== 'New') return false;
+            
+            const daysInPipeline = getDaysInPipeline(lead.createdAt);
+            return daysInPipeline > 3;
         }
 
         // ============================================
@@ -383,20 +438,56 @@
 
             leadsList.forEach(lead => {
                 const leadCard = document.createElement('div');
-                leadCard.className = 'bg-gray-700 rounded-lg p-4 border border-gray-600 hover:shadow-md transition-shadow';
+                
+                // Apply visual urgency logic
+                const daysInPipeline = getDaysInPipeline(lead.createdAt);
+                const overdue = isOverdue(lead);
+                const today = isToday(lead.createdAt);
+                
+                // Set background color and border based on urgency
+                let cardBgClass = 'bg-gray-700';
+                let borderClass = 'border-gray-600';
+                if (overdue) {
+                    cardBgClass = 'bg-red-50 dark:bg-red-900/20';
+                    borderClass = 'border-red-300 dark:border-red-700';
+                }
+                
+                leadCard.className = `${cardBgClass} rounded-lg p-4 border ${borderClass} hover:shadow-md transition-shadow`;
                 
                 const hasNotes = lead.notes && lead.notes.trim().length > 0;
                 const notesPreview = hasNotes ? (lead.notes.length > 50 ? lead.notes.substring(0, 50) + '...' : lead.notes) : '';
                 
+                // Badge HTML
+                let badgeHTML = '';
+                if (overdue) {
+                    badgeHTML = '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"><i class="fas fa-exclamation-circle mr-1"></i>Overdue</span>';
+                } else if (today) {
+                    badgeHTML = '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"><i class="fas fa-check-circle mr-1"></i>Today</span>';
+                }
+                
+                // Set text colors based on background
+                const textColorClass = overdue ? 'text-gray-800' : 'text-gray-100';
+                const textSecondaryClass = overdue ? 'text-gray-600' : 'text-gray-400';
+                const textValueClass = overdue ? 'text-blue-600' : 'text-blue-400';
+                const textDaysClass = overdue ? 'text-gray-700' : 'text-gray-500';
+                const notesBgClass = overdue ? 'bg-gray-200' : 'bg-gray-600';
+                const notesTextClass = overdue ? 'text-gray-800' : 'text-gray-300';
+                
                 leadCard.innerHTML = `
                     <div class="mb-3">
-                        <h4 class="font-semibold text-gray-100 text-sm mb-1">${escapeHtml(lead.clientName)}</h4>
-                        <p class="text-xs text-gray-400 mb-2">
+                        <div class="flex items-start justify-between mb-1">
+                            <h4 class="font-semibold ${textColorClass} text-sm flex-1">${escapeHtml(lead.clientName)}</h4>
+                            ${badgeHTML}
+                        </div>
+                        <p class="text-xs ${textSecondaryClass} mb-2">
                             <i class="fas fa-envelope mr-1"></i>${escapeHtml(lead.email)}
                         </p>
-                        <p class="text-sm font-semibold text-blue-400 mb-2">$${lead.estimatedValue.toFixed(2)}</p>
+                        <p class="text-sm font-semibold ${textValueClass} mb-2">$${lead.estimatedValue.toFixed(2)}</p>
+                        <p class="text-xs ${textDaysClass} mb-2">
+                            <i class="fas fa-calendar-alt mr-1"></i>Days in Pipeline: <span class="font-semibold">${daysInPipeline}</span>
+                        </p>
                         ${hasNotes ? `
-                            <div class="mt-2 p-2 bg-gray-600 rounded text-xs text-gray-300">
+                            <div class="mt-2 p-2 ${notesBgClass} rounded text-xs ${notesTextClass}">
                                 <i class="fas fa-sticky-note mr-1 text-yellow-400"></i>
                                 <span>${escapeHtml(notesPreview)}</span>
                             </div>
@@ -405,7 +496,7 @@
                     <div class="flex flex-col space-y-2">
                         <select 
                             onchange="updateLeadStatus(${lead.id}, this.value)"
-                            class="text-xs bg-gray-600 border border-gray-500 rounded px-2 py-1 text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            class="text-xs ${overdue ? 'bg-white border-gray-300 text-gray-800' : 'bg-gray-600 border-gray-500 text-gray-100'} border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         >
                             <option value="New" ${lead.leadStatus === 'New' ? 'selected' : ''}>New</option>
                             <option value="Contacted" ${lead.leadStatus === 'Contacted' ? 'selected' : ''}>Contacted</option>
